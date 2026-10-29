@@ -58,8 +58,11 @@ function formatWhen(p) {
 // ---------- tabs ----------
 document.querySelectorAll('.tab').forEach((btn) => btn.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+  $('#tab-tasks').hidden = btn.dataset.tab !== 'tasks';
   $('#tab-photos').hidden = btn.dataset.tab !== 'photos';
   $('#tab-setup').hidden = btn.dataset.tab !== 'setup';
+  if (btn.dataset.tab === 'tasks') loadTasks();
+  if (btn.dataset.tab === 'photos') loadPhotos();
   if (btn.dataset.tab === 'setup') { loadSettings(); loadRetention(); }
 }));
 
@@ -161,10 +164,15 @@ $('#export').addEventListener('click', async () => {
 });
 
 let activitiesLoaded = false;
+let activityList = null;
+async function activityOptions() {
+  if (!activityList) activityList = await api('/admin-api/activities');
+  return activityList;
+}
 async function ensureActivityOptions() {
   if (activitiesLoaded) return;
   try {
-    const list = await api('/admin-api/activities');
+    const list = await activityOptions();
     const select = $('#editForm').elements.activity;
     for (const a of list) select.append(el('option', { value: a, text: a }));
     activitiesLoaded = true;
@@ -229,6 +237,287 @@ $('#editForm').addEventListener('submit', async (e) => {
 
 dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
 
+// ---------- tasks ----------
+const taskState = { page: 1, current: null, busy: false, reviewer: '' };
+const taskDialog = $('#taskDetail');
+const TASK_PAGE_SIZE = 25;
+
+function legWhen(leg) {
+  return leg && leg.date && leg.time ? formatWhen({ captureDate: leg.date, captureTime: leg.time }) : '';
+}
+
+function reviewFace(t) {
+  if (t.pendingReview) return { kind: 'warn', text: 'Awaiting review' };
+  if (t.reviewStatus === 'approved') return { kind: 'ok', text: 'Approved' };
+  if (t.reviewStatus === 'rejected') return { kind: 'bad', text: 'Rejected' };
+  return { kind: '', text: 'Not submitted' };
+}
+
+function pill(kind, text) {
+  return el('span', { class: 'pill' }, el('span', { class: `dot ${kind}` }), el('span', { text }));
+}
+
+function taskFilterParams() {
+  const form = new FormData($('#taskFilters'));
+  const params = new URLSearchParams();
+  for (const [k, v] of form) if (String(v).trim()) params.set(k, String(v).trim());
+  return params;
+}
+
+async function loadTasks() {
+  let list;
+  try {
+    const select = $('#taskFilters').elements.jobType;
+    if (select.options.length === 1) for (const a of await activityOptions()) select.append(el('option', { value: a, text: a }));
+    const params = taskFilterParams();
+    params.set('page', taskState.page);
+    params.set('pageSize', TASK_PAGE_SIZE);
+    list = await api(`/admin-api/tasks?${params}`);
+  } catch (e) { toast(e.message); return; }
+  const body = $('#taskGrid tbody');
+  body.replaceChildren();
+  for (const t of list.items) body.append(taskRow(t));
+  $('#taskEmpty').hidden = list.items.length > 0;
+  $('#taskSummary').textContent = `${list.total} task${list.total === 1 ? '' : 's'}`;
+  const pages = Math.max(1, Math.ceil(list.total / TASK_PAGE_SIZE));
+  $('#taskPageInfo').textContent = `Page ${list.page} of ${pages}`;
+  $('#taskPrev').disabled = list.page <= 1;
+  $('#taskNext').disabled = list.page >= pages;
+  refreshPendingBadge();
+}
+
+async function refreshPendingBadge() {
+  try {
+    const s = await api('/admin-api/settings');
+    taskState.reviewer = s.reviewerName || '';
+    $('#pendingBadge').textContent = s.pendingReviewCount;
+  } catch { /* badge only */ }
+}
+
+function taskRow(t) {
+  const face = reviewFace(t);
+  const thumb = t.thumbUrl
+    ? el('img', { class: 'thumb', src: t.thumbUrl, alt: `Time-in selfie of ${t.technicianName}`, loading: 'lazy', width: 84, height: 62, onclick: () => openTask(t.id) })
+    : el('div', { class: 'thumb' });
+  return el('tr', {},
+    el('td', {}, thumb),
+    el('td', {}, pill(t.status === 'complete' ? 'ok' : 'warn', t.statusLabel || t.status || '')),
+    el('td', {}, pill(face.kind, face.text)),
+    el('td', { text: t.technicianName || '' }),
+    el('td', { text: t.client || '' }),
+    el('td', { text: t.jobType || '' }),
+    el('td', { text: legWhen(t.timeIn) }),
+    el('td', { text: String(t.photoCount) }),
+    el('td', {}, el('button', { class: 'small', text: 'Open / review', onclick: () => openTask(t.id) })));
+}
+
+$('#taskFilters').addEventListener('submit', (e) => { e.preventDefault(); taskState.page = 1; loadTasks(); });
+$('#taskClear').addEventListener('click', () => { $('#taskFilters').reset(); taskState.page = 1; loadTasks(); });
+$('#taskRefresh').addEventListener('click', loadTasks);
+$('#taskPrev').addEventListener('click', () => { taskState.page--; loadTasks(); });
+$('#taskNext').addEventListener('click', () => { taskState.page++; loadTasks(); });
+$('#taskExport').addEventListener('click', () => downloadTasks($('#taskExport'), taskFilterParams()));
+$('#taskExportApproved').addEventListener('click', () => downloadTasks($('#taskExportApproved'), new URLSearchParams({ reviewStatus: 'approved' })));
+
+async function downloadTasks(button, params) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Preparing…';
+  try {
+    const res = await api(`/admin-api/tasks/export.xlsx?${params}`);
+    const blob = await res.blob();
+    const match = /filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(res.headers.get('content-disposition') || '');
+    const a = el('a', { href: URL.createObjectURL(blob), download: match ? decodeURIComponent(match[1]) : 'tasks.xlsx' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    toast('Excel file downloaded.');
+  } catch (e) { toast(e.message); }
+  finally { button.disabled = false; button.textContent = label; }
+}
+
+$('#pendingView').addEventListener('click', () => {
+  $('#taskFilters').reset();
+  $('#taskFilters').elements.reviewStatus.value = 'awaiting';
+  taskState.page = 1;
+  loadTasks();
+});
+
+const SELFIE_LABELS = [['selfie_timein', 'Time in', 'timeIn'], ['selfie_client', 'At client', 'atClient'], ['selfie_timeout', 'Time out', 'timeOut']];
+
+async function openTask(id) {
+  let data;
+  try { data = await api(`/admin-api/tasks/${id}`); }
+  catch (e) { toast(e.message); return; }
+  renderTask(data);
+  if (!taskDialog.open) taskDialog.showModal();
+}
+
+function renderTask(data) {
+  const t = data.task;
+  taskState.current = t;
+  $('#tDeleteMsg').textContent = '';
+  $('#tTitle').textContent = t.technicianName || 'Task';
+  const parts = [t.statusLabel || t.status, t.client || 'No client yet', legWhen(t.timeIn)].filter(Boolean);
+  $('#tMeta').textContent = parts.join(' · ');
+
+  const selfies = $('#tSelfies');
+  selfies.replaceChildren();
+  for (const [kind, label, legKey] of SELFIE_LABELS) {
+    const photo = data.photos.find(p => p.kind === kind);
+    const leg = t[legKey];
+    const caption = el('figcaption', {}, el('div', { class: 'label', text: label }));
+    caption.append(el('div', { text: legWhen(leg) || 'Not captured' }));
+    if (leg && leg.address) caption.append(el('div', { class: 'muted', text: leg.address }));
+    if (leg && leg.mapsUrl) caption.append(el('a', { href: leg.mapsUrl, target: '_blank', rel: 'noopener', text: 'Open map' }));
+    const figure = el('figure', {});
+    if (photo) figure.append(el('a', { href: photo.imageUrl, target: '_blank', rel: 'noopener' }, el('img', { src: photo.thumbUrl, alt: `${label} selfie`, loading: 'lazy' })));
+    figure.append(caption);
+    selfies.append(el('div', { class: 'selfie' }, figure));
+  }
+
+  const grid = $('#tWorkPhotos');
+  grid.replaceChildren();
+  const work = data.photos.filter(p => p.kind === 'extra');
+  if (!work.length) grid.append(el('div', { class: 'muted small', text: 'No work photos.' }));
+  for (const p of work) grid.append(el('a', { href: p.imageUrl, target: '_blank', rel: 'noopener' }, el('img', { src: p.thumbUrl, alt: 'Work photo', loading: 'lazy' })));
+
+  const f = $('#taskEditForm').elements;
+  const select = f.jobType;
+  if (select.options.length === 1) activityOptions().then(list => { for (const a of list) select.append(el('option', { value: a, text: a })); select.value = t.jobType || ''; }).catch(() => {});
+  f.client.value = t.client || '';
+  f.jobType.value = t.jobType || '';
+  f.oldImei.value = t.oldImei || '';
+  f.newImei.value = t.newImei || '';
+  f.oldSim.value = t.oldSim || '';
+  f.newSim.value = t.newSim || '';
+  f.plateNumber.value = t.plateNumber || '';
+  f.note.value = t.note || '';
+  setTaskSaveMessage('');
+
+  renderReviewPanel(t);
+  renderReviewHistory(data.reviews);
+  renderEditHistory(data.edits);
+}
+
+function renderReviewPanel(t) {
+  const face = reviewFace(t);
+  const state = $('#tReviewState');
+  state.replaceChildren(pill(face.kind, face.text));
+  if (t.reviewReason) state.append(el('div', { class: 'small', text: `Reason: ${t.reviewReason}` }));
+  $('#tReviewer').textContent = t.reviewedBy
+    ? `Last decision on PC: ${t.reviewedBy}${t.reviewedAt ? ` · ${new Date(t.reviewedAt).toLocaleString()}` : ''}`
+    : `Decisions are recorded against the PC user: ${taskState.reviewer}`;
+  const reviewable = t.status === 'complete';
+  const decided = reviewable && !t.pendingReview;
+  $('#tReviewActions').hidden = !reviewable;
+  $('#tChangeDecision').hidden = !decided;
+  $('#tApprove').hidden = decided;
+  $('#tReject').hidden = decided;
+  $('#tReasonWrap').hidden = decided;
+  $('#tReason').value = '';
+  setReviewMessage('');
+  $('#tReviewNote').textContent = reviewable ? '' : 'This task can be reviewed once the technician has timed out.';
+}
+
+function renderReviewHistory(items) {
+  const list = $('#tReviewHistory');
+  list.replaceChildren();
+  if (!items.length) { list.append(el('li', { class: 'muted', text: 'No decisions yet.' })); return; }
+  for (const r of items) {
+    const li = el('li', {}, el('span', { text: r.reason ? `${r.decision}: ${r.reason}` : r.decision }));
+    li.append(el('span', { class: 'muted', text: `${new Date(r.reviewedAt).toLocaleString()} · ${r.reviewedBy}` }));
+    list.append(li);
+  }
+}
+
+function renderEditHistory(items) {
+  const list = $('#tEditHistory');
+  list.replaceChildren();
+  if (!items.length) { list.append(el('li', { class: 'muted', text: 'No edits yet.' })); return; }
+  for (const h of items) {
+    list.append(el('li', {},
+      el('span', { text: `${h.field}: “${h.oldValue ?? ''}” → “${h.newValue ?? ''}”` }),
+      el('span', { class: 'muted', text: `${new Date(h.editedAt).toLocaleString()} · ${h.editedBy}` })));
+  }
+}
+
+function setTaskSaveMessage(text, kind = '') {
+  const m = $('#taskSaveMsg');
+  m.textContent = text;
+  m.className = `small ${kind}`;
+}
+function setReviewMessage(text, kind = '') {
+  const m = $('#tReviewMsg');
+  m.textContent = text;
+  m.className = `small ${kind}`;
+}
+
+$('#taskEditForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  // The server replaces all eight fields, so every one is sent, blank included.
+  const body = {
+    client: f.client.value, jobType: f.jobType.value, oldImei: f.oldImei.value, newImei: f.newImei.value,
+    oldSim: f.oldSim.value, newSim: f.newSim.value, plateNumber: f.plateNumber.value, note: f.note.value,
+  };
+  try {
+    await api(`/admin-api/tasks/${taskState.current.id}`, { method: 'PUT', json: body });
+    renderTask(await api(`/admin-api/tasks/${taskState.current.id}`));
+    setTaskSaveMessage('Saved.', 'ok');
+    loadTasks();
+  } catch (err) { setTaskSaveMessage(err.message, 'bad'); }
+});
+
+async function decide(decision, reason) {
+  if (taskState.busy) return;
+  taskState.busy = true;
+  const buttons = [$('#tApprove'), $('#tReject'), $('#tChangeDecision')];
+  buttons.forEach(b => (b.disabled = true));
+  const id = taskState.current.id;
+  try {
+    await api(`/admin-api/tasks/${id}/${decision}`, { method: 'POST', json: decision === 'reject' ? { reason } : {} });
+    renderTask(await api(`/admin-api/tasks/${id}`));
+    setReviewMessage(decision === 'approve' ? 'Approved.' : 'Rejected.', 'ok');
+    loadTasks();
+  } catch (e) { setReviewMessage(e.message, 'bad'); }
+  finally { taskState.busy = false; buttons.forEach(b => (b.disabled = false)); }
+}
+
+$('#tApprove').addEventListener('click', () => decide('approve'));
+$('#tReject').addEventListener('click', () => {
+  const reason = $('#tReason').value.trim();
+  if (!reason) { setReviewMessage('A reason is required to reject.', 'bad'); $('#tReason').focus(); return; }
+  decide('reject', reason);
+});
+$('#tChangeDecision').addEventListener('click', () => {
+  $('#tChangeDecision').hidden = true;
+  $('#tApprove').hidden = false;
+  $('#tReject').hidden = false;
+  $('#tReasonWrap').hidden = false;
+});
+
+$('#tDelete').addEventListener('click', async () => {
+  const task = taskState.current;
+  if (!task) return;
+  const who = task.client || task.technicianName || 'this task';
+  const count = task.photoCount ?? 0;
+  // Typed confirmation: a misclick here destroys a field visit that cannot be recaptured.
+  if (!confirm(`Delete the task for ${who} and its ${count} photo(s)?\n\nThe task, every selfie and work photo, and its review and edit history are removed for good. This cannot be undone.`)) return;
+  const button = $('#tDelete');
+  button.disabled = true;
+  try {
+    const r = await api(`/admin-api/tasks/${task.id}`, { method: 'DELETE' });
+    taskDialog.close();
+    toast(`Task deleted with ${r.photosDeleted} photo(s).`);
+    loadTasks();
+    loadSettings();
+  } catch (e) {
+    $('#tDeleteMsg').textContent = e.message;
+    $('#tDeleteMsg').className = 'small bad';
+  } finally { button.disabled = false; }
+});
+taskDialog.addEventListener('click', (e) => { if (e.target === taskDialog) taskDialog.close(); });
+
 // ---------- phone setup ----------
 async function loadSettings() {
   let s;
@@ -243,6 +532,10 @@ async function loadSettings() {
   $('#retInfo').textContent = 'Automatic cleanup is disabled for the read-only SQL Server connection.';
   $('#dataFolder').textContent = s.dataFolder;
   $('#photoCount').textContent = s.photoCount;
+  $('#taskCount').textContent = s.taskCount;
+  $('#pendingCount').textContent = s.pendingReviewCount;
+  $('#reviewerName').textContent = s.reviewerName || '-';
+  $('#pendingBadge').textContent = s.pendingReviewCount;
   $('#dbSize').textContent = formatBytes(s.dbSizeBytes);
   $('#version').textContent = s.version || '';
 
@@ -363,7 +656,11 @@ $("#retSave").addEventListener("click", async () => {
   } catch (e) { toast(e.message); }
 });
 
-loadPhotos();
-setInterval(() => { if (!dialog.open && !$('#tab-photos').hidden && state.page === 1) loadPhotos(); }, 30000);
+loadTasks();
+setInterval(() => {
+  if (!dialog.open && !$('#tab-photos').hidden && state.page === 1) loadPhotos();
+  if (!taskDialog.open && !$('#tab-tasks').hidden && taskState.page === 1) loadTasks();
+}, 30000);
 
 if (location.hash === "#setup") document.querySelector(".tab[data-tab=setup]").click();
+if (location.hash === "#photos") document.querySelector(".tab[data-tab=photos]").click();

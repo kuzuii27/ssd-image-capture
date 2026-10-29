@@ -99,8 +99,10 @@ internal static class Program
         EnsureSqlServerDatabase(store.SqlServerMdfPath);
         var connectionString = $"Server=(localdb)\\MSSQLLocalDB;AttachDbFilename={store.SqlServerMdfPath};Database=SSD_mobileCamera;Integrated Security=true;TrustServerCertificate=true;Connect Timeout=5";
         EnsureActivityColumns(connectionString);
+        EnsureTaskTables(connectionString);
         var sqlServerPhotos = new SqlServerPhotoSource(connectionString);
         builder.Services.AddSingleton(sqlServerPhotos);
+        builder.Services.AddSingleton(new SqlServerTaskSource(connectionString));
         builder.Services.AddSingleton(new SettingsStorePhotoStorage(store));
         builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
@@ -190,6 +192,100 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Photos
     ALTER TABLE dbo.Photos ADD Activity nvarchar(50) NULL;
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Photos') AND name = 'UpdatedAt')
     ALTER TABLE dbo.Photos ADD UpdatedAt datetimeoffset NULL;";
+        command.ExecuteNonQuery();
+    }
+
+    // Task lifecycle tables. Runs on every startup so existing installs gain them on first launch after an update; dbo.Photos is untouched.
+    static void EnsureTaskTables(string connectionString)
+    {
+        using var connection = new SqlConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Tasks' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.Tasks (
+        Id uniqueidentifier NOT NULL PRIMARY KEY,
+        TechnicianName nvarchar(200) NOT NULL,
+        Status nvarchar(20) NOT NULL,
+        Client nvarchar(200) NULL,
+        JobType nvarchar(50) NULL,
+        OldImei nvarchar(50) NULL,
+        NewImei nvarchar(50) NULL,
+        OldSim nvarchar(50) NULL,
+        NewSim nvarchar(50) NULL,
+        PlateNumber nvarchar(20) NULL,
+        Note nvarchar(2000) NULL,
+        TimeInLatitude float NULL,
+        TimeInLongitude float NULL,
+        TimeInAccuracy float NULL,
+        TimeInAddress nvarchar(500) NULL,
+        TimeInCapturedAt datetimeoffset NULL,
+        TimeInDate date NULL,
+        TimeInTime time NULL,
+        ClientLatitude float NULL,
+        ClientLongitude float NULL,
+        ClientAccuracy float NULL,
+        ClientAddress nvarchar(500) NULL,
+        ClientCapturedAt datetimeoffset NULL,
+        ClientDate date NULL,
+        ClientTime time NULL,
+        TimeOutLatitude float NULL,
+        TimeOutLongitude float NULL,
+        TimeOutAccuracy float NULL,
+        TimeOutAddress nvarchar(500) NULL,
+        TimeOutCapturedAt datetimeoffset NULL,
+        TimeOutDate date NULL,
+        TimeOutTime time NULL,
+        ReviewStatus nvarchar(20) NOT NULL CONSTRAINT DF_Tasks_ReviewStatus DEFAULT 'none',
+        ReviewReason nvarchar(500) NULL,
+        ReviewedAt datetimeoffset NULL,
+        ReviewedBy nvarchar(200) NULL,
+        ReceivedAt datetimeoffset NOT NULL,
+        UpdatedAt datetimeoffset NOT NULL
+    );
+    CREATE INDEX IX_Tasks_TimeInDate ON dbo.Tasks(TimeInDate);
+    CREATE INDEX IX_Tasks_Status ON dbo.Tasks(Status);
+    CREATE INDEX IX_Tasks_ReviewStatus ON dbo.Tasks(ReviewStatus);
+    CREATE INDEX IX_Tasks_TechnicianName ON dbo.Tasks(TechnicianName);
+END;
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TaskPhotos' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.TaskPhotos (
+        Id uniqueidentifier NOT NULL PRIMARY KEY,
+        TaskId uniqueidentifier NOT NULL CONSTRAINT FK_TaskPhotos_Tasks FOREIGN KEY REFERENCES dbo.Tasks(Id) ON DELETE CASCADE,
+        Kind nvarchar(20) NOT NULL,
+        ImagePath nvarchar(500) NOT NULL,
+        CapturedAt datetimeoffset NOT NULL,
+        ReceivedAt datetimeoffset NOT NULL
+    );
+    CREATE INDEX IX_TaskPhotos_TaskId ON dbo.TaskPhotos(TaskId);
+END;
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TaskReviews' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.TaskReviews (
+        Id bigint IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        TaskId uniqueidentifier NOT NULL CONSTRAINT FK_TaskReviews_Tasks FOREIGN KEY REFERENCES dbo.Tasks(Id) ON DELETE CASCADE,
+        Decision nvarchar(20) NOT NULL,
+        Reason nvarchar(500) NULL,
+        ReviewedBy nvarchar(200) NOT NULL,
+        ReviewedAt datetimeoffset NOT NULL
+    );
+    CREATE INDEX IX_TaskReviews_TaskId ON dbo.TaskReviews(TaskId);
+END;
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'TaskEdits' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.TaskEdits (
+        Id bigint IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        TaskId uniqueidentifier NOT NULL CONSTRAINT FK_TaskEdits_Tasks FOREIGN KEY REFERENCES dbo.Tasks(Id) ON DELETE CASCADE,
+        Field nvarchar(50) NOT NULL,
+        OldValue nvarchar(2000) NULL,
+        NewValue nvarchar(2000) NULL,
+        EditedBy nvarchar(200) NOT NULL,
+        EditedAt datetimeoffset NOT NULL
+    );
+    CREATE INDEX IX_TaskEdits_TaskId ON dbo.TaskEdits(TaskId);
+END;";
         command.ExecuteNonQuery();
     }
 

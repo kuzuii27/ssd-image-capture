@@ -11,13 +11,81 @@
 <header class="topbar">
   <div class="brand"><img src="/logo.png" alt="" width="36" height="36"><span>SSD Photo Capture</span></div>
   <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="photos" role="tab">Photos</button>
+    <button class="tab active" data-tab="tasks" role="tab">Tasks</button>
+    <button class="tab" data-tab="photos" role="tab">Photos</button>
     <button class="tab" data-tab="setup" role="tab">Settings</button>
   </nav>
 </header>
 
 <main>
-  <section id="tab-photos">
+  <section id="tab-tasks">
+    <form id="taskFilters" class="filters" autocomplete="off">
+      <label>From <input type="date" name="from"></label>
+      <label>To <input type="date" name="to"></label>
+      <label>Technician <input type="text" name="name" placeholder="Technician"></label>
+      <label>Client <input type="text" name="client" placeholder="Client"></label>
+      <label>Status
+        <select name="status">
+          <option value="">Any</option>
+          <option value="timed_in">Timed in</option>
+          <option value="at_client">At client</option>
+          <option value="job_saved">Job saved</option>
+          <option value="complete">Complete</option>
+        </select>
+      </label>
+      <label>Review
+        <select name="reviewStatus">
+          <option value="">Any</option>
+          <option value="awaiting">Awaiting review</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+        </select>
+      </label>
+      <label>Job type <select name="jobType"><option value="">Any</option></select></label>
+      <label class="grow">Search <input type="search" name="q" placeholder="Technician, client, note or address"></label>
+      <div class="actions">
+        <button type="submit" class="primary">Apply</button>
+        <button type="button" id="taskClear">Clear</button>
+      </div>
+    </form>
+
+    <div class="toolbar">
+      <button id="pendingView" class="primary">Pending review <span id="pendingBadge" class="badge">0</span></button>
+      <div id="taskSummary" class="muted" aria-live="polite"></div>
+      <div class="spacer"></div>
+      <button id="taskExport" class="primary">Export to Excel</button>
+      <button id="taskExportApproved" title="Export approved tasks regardless of the filter bar">Export approved only</button>
+      <button id="taskRefresh" title="Reload the list">Refresh</button>
+    </div>
+
+    <div class="table-wrap">
+      <table id="taskGrid">
+        <thead>
+          <tr>
+            <th scope="col">Photo</th>
+            <th scope="col">Status</th>
+            <th scope="col">Review</th>
+            <th scope="col">Technician</th>
+            <th scope="col">Client</th>
+            <th scope="col">Job type</th>
+            <th scope="col">Time in</th>
+            <th scope="col">Photos</th>
+            <th scope="col"><span class="visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="taskEmpty" class="empty" hidden>No tasks match these filters yet.</div>
+    </div>
+
+    <div class="pager">
+      <button id="taskPrev">Previous</button>
+      <span id="taskPageInfo" class="muted"></span>
+      <button id="taskNext">Next</button>
+    </div>
+  </section>
+
+  <section id="tab-photos" hidden>
     <form id="filters" class="filters" autocomplete="off">
       <label>From <input type="date" name="from"></label>
       <label>To <input type="date" name="to"></label>
@@ -127,6 +195,9 @@
         <dl class="details">
           <dt>Data folder</dt><dd id="dataFolder">-</dd>
           <dt>Photos stored</dt><dd id="photoCount">-</dd>
+          <dt>Tasks stored</dt><dd id="taskCount">-</dd>
+          <dt>Awaiting review</dt><dd id="pendingCount">-</dd>
+          <dt>Reviewed on PC</dt><dd id="reviewerName">-</dd>
           <dt>Database size</dt><dd id="dbSize">-</dd>
           <dt>Version</dt><dd id="version">-</dd>
         </dl>
@@ -156,6 +227,65 @@
       </form>
       <h3>Change history</h3>
       <ul id="history" class="history"></ul>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="taskDetail">
+  <form method="dialog" class="close-row"><button aria-label="Close" class="icon-btn">✕</button></form>
+  <div class="task-detail">
+    <h2 id="tTitle">Task</h2>
+    <p id="tMeta" class="muted small"></p>
+
+    <h3>Selfies</h3>
+    <div id="tSelfies" class="selfie-row"></div>
+
+    <h3>Work photos</h3>
+    <div id="tWorkPhotos" class="photo-grid"></div>
+
+    <div class="task-panes">
+      <div>
+        <h3>Job details</h3>
+        <form id="taskEditForm" autocomplete="off">
+          <label>Client <input type="text" name="client" maxlength="200"></label>
+          <label>Job type <select name="jobType"><option value="">(none)</option></select></label>
+          <div class="row two-up">
+            <label>OLD IMEI <input type="text" name="oldImei" maxlength="50"></label>
+            <label>NEW IMEI <input type="text" name="newImei" maxlength="50"></label>
+          </div>
+          <div class="row two-up">
+            <label>OLD SIM <input type="text" name="oldSim" maxlength="50"></label>
+            <label>NEW SIM <input type="text" name="newSim" maxlength="50"></label>
+          </div>
+          <label>Plate number <input type="text" name="plateNumber" maxlength="50"></label>
+          <label>Note <textarea name="note" rows="3" maxlength="2000"></textarea></label>
+          <div class="row"><button type="submit" class="primary">Save changes</button></div>
+          <p id="taskSaveMsg" class="small" aria-live="polite"></p>
+        </form>
+      </div>
+      <div>
+        <h3>Review</h3>
+        <div id="tReviewState" class="status"></div>
+        <p id="tReviewer" class="muted small"></p>
+        <div class="row" id="tReviewActions">
+          <button type="button" id="tChangeDecision">Change decision…</button>
+          <button type="button" id="tApprove" class="primary">Approve</button>
+          <button type="button" id="tReject" class="danger">Reject</button>
+        </div>
+        <label id="tReasonWrap">Reason for rejection <textarea id="tReason" rows="3" maxlength="500" required></textarea></label>
+        <p id="tReviewMsg" class="small" aria-live="polite"></p>
+        <p id="tReviewNote" class="muted small"></p>
+
+        <h3>Review history</h3>
+        <ul id="tReviewHistory" class="history"></ul>
+        <h3>Field edit history</h3>
+        <ul id="tEditHistory" class="history"></ul>
+
+        <h3>Delete this task</h3>
+        <p class="muted small">Removes the task, all its selfies and work photos, and its review and edit history. This cannot be undone — export to Excel first if you need a record.</p>
+        <div class="row"><button type="button" id="tDelete" class="danger">Delete task…</button></div>
+        <p id="tDeleteMsg" class="small" aria-live="polite"></p>
+      </div>
     </div>
   </div>
 </dialog>
