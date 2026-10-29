@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSD Photo Capture</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="/logo.png" alt="" width="36" height="36"><span>SSD Photo Capture</span></div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="photos" role="tab">Photos</button>
+    <button class="tab" data-tab="setup" role="tab">Settings</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-photos">
+    <form id="filters" class="filters" autocomplete="off">
+      <label>From <input type="date" name="from"></label>
+      <label>To <input type="date" name="to"></label>
+      <label>Name <input type="text" name="name" placeholder="Technician"></label>
+      <label>Client <input type="text" name="client" placeholder="Client"></label>
+      <label>Activity <input type="text" name="activity" placeholder="Activity"></label>
+      <label class="grow">Search <input type="search" name="q" placeholder="Name, client, note or address"></label>
+      <div class="actions">
+        <button type="submit" class="primary">Apply</button>
+        <button type="button" id="clear">Clear</button>
+      </div>
+    </form>
+
+    <div class="toolbar">
+      <div id="summary" class="muted" aria-live="polite"></div>
+      <div class="spacer"></div>
+      <label class="check"><input type="checkbox" id="withImages"> Include photos in Excel</label>
+      <button id="export" class="primary">Export to Excel</button>
+      <button id="refresh" title="Reload the list">Refresh</button>
+    </div>
+
+    <div class="table-wrap">
+      <table id="grid">
+        <thead>
+          <tr>
+            <th scope="col">Photo</th>
+            <th scope="col"><button type="button" class="column-sort" data-sort="date" aria-label="Sort by date and time">Date &amp; time <span aria-hidden="true"></span></button><input class="column-filter" type="date" data-column="date" aria-label="Filter by capture date"></th>
+            <th scope="col"><button type="button" class="column-sort" data-sort="name">Name <span aria-hidden="true"></span></button><input class="column-filter" type="search" data-column="name" placeholder="Filter name" aria-label="Filter by name"></th>
+            <th scope="col"><button type="button" class="column-sort" data-sort="client">Client <span aria-hidden="true"></span></button><input class="column-filter" type="search" data-column="client" placeholder="Filter client" aria-label="Filter by client"></th>
+            <th scope="col"><button type="button" class="column-sort" data-sort="activity">Activity <span aria-hidden="true"></span></button><input class="column-filter" type="search" data-column="activity" placeholder="Filter activity" aria-label="Filter by activity"></th>
+            <th scope="col"><button type="button" class="column-sort" data-sort="note">Note <span aria-hidden="true"></span></button><input class="column-filter" type="search" data-column="note" placeholder="Filter note" aria-label="Filter by note"></th>
+            <th scope="col"><button type="button" class="column-sort" data-sort="location">Location <span aria-hidden="true"></span></button><input class="column-filter" type="search" data-column="location" placeholder="Filter address / GPS" aria-label="Filter by location"></th>
+            <th scope="col"><span class="visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="empty" class="empty" hidden>No photos match these filters yet.</div>
+    </div>
+
+    <div class="pager">
+      <button id="prev">Previous</button>
+      <span id="pageInfo" class="muted"></span>
+      <button id="next">Next</button>
+    </div>
+  </section>
+
+  <section id="tab-setup" hidden>
+    <div class="cards">
+      <article class="card">
+        <h2>Connect a phone</h2>
+        <div id="qrBox" class="qr-box"><div class="muted">Loading…</div></div>
+        <p class="muted small">In the phone app, open <b>Settings</b> and tap <b>Scan setup QR</b>. The code contains the server address and the access token, so keep it private.</p>
+      </article>
+
+      <article class="card">
+        <h2>Connection details</h2>
+        <dl class="details">
+          <dt>Phone address</dt><dd id="phoneUrl">-</dd>
+          <dt>Access token</dt>
+          <dd>
+            <code id="tokenText">••••••••••••••••</code>
+            <button id="toggleToken" class="small">Show</button>
+            <button id="copyToken" class="small">Copy</button>
+          </dd>
+          <dt>Token created</dt><dd id="tokenDate">-</dd>
+        </dl>
+        <div class="row">
+          <button id="regen" class="danger">Create new token…</button>
+        </div>
+        <p class="muted small">A new token signs out every phone until it scans the new QR code.</p>
+      </article>
+
+      <article class="card">
+        <h2>Tailscale</h2>
+        <div id="tsStatus" class="status"></div>
+        <div class="row"><button id="tsServe" class="primary" hidden>Set up phone link</button></div>
+        <p id="tsMsg" class="muted small"></p>
+      </article>
+
+      <article class="card">
+        <h2>Remote admin access</h2>
+        <p class="muted small">View this admin page from another PC or phone over Tailscale. Requires a password since it leaves this PC.</p>
+        <label>Admin password <input type="password" id="adminPassword" minlength="8" placeholder="At least 8 characters"></label>
+        <div class="row"><button id="setAdminPassword" class="primary">Set password</button></div>
+        <p id="adminPasswordMsg" class="small" aria-live="polite"></p>
+        <div class="row"><button id="tsServeAdmin" class="primary" hidden>Enable remote access</button></div>
+        <dl class="details" id="remoteAdminBox" hidden>
+          <dt>Remote URL</dt><dd id="remoteAdminUrl">-</dd>
+        </dl>
+        <p id="tsAdminMsg" class="muted small"></p>
+      </article>
+
+      <article class="card">
+        <h2>Automatic cleanup</h2>
+        <label class="check"><input type="checkbox" id="retEnabled"> Delete old photos automatically</label>
+        <div class="row ret-row">
+          <label>Older than <input type="number" id="retDays" min="1" max="3650" step="1"> days</label>
+        </div>
+        <p id="retInfo" class="small"></p>
+        <div class="row"><button id="retSave" class="primary">Save</button></div>
+        <p class="muted small">Checked every 6 hours, by capture date. Deletes the photo file, its thumbnail, the record and its edit history. Photos that arrived in the last 24 hours are kept. Deleted photos cannot be restored, so export to Excel first if you need a copy.</p>
+      </article>
+
+      <article class="card">
+        <h2>This PC</h2>
+        <dl class="details">
+          <dt>Data folder</dt><dd id="dataFolder">-</dd>
+          <dt>Photos stored</dt><dd id="photoCount">-</dd>
+          <dt>Database size</dt><dd id="dbSize">-</dd>
+          <dt>Version</dt><dd id="version">-</dd>
+        </dl>
+        <p class="muted small">To move to another PC: copy the data folder, install the app there, and choose that folder. Use the tray icon's <b>Change data folder…</b> at any time.</p>
+      </article>
+    </div>
+  </section>
+</main>
+
+<dialog id="detail">
+  <form method="dialog" class="close-row"><button aria-label="Close" class="icon-btn">✕</button></form>
+  <div class="detail-grid">
+    <div class="photo-pane"><a id="dPhotoLink" target="_blank" rel="noopener"><img id="dPhoto" alt="Captured photo"></a></div>
+    <div class="form-pane">
+      <h2 id="dTitle">Photo</h2>
+      <p id="dMeta" class="muted small"></p>
+      <form id="editForm" autocomplete="off">
+        <label>Name <input type="text" name="name" maxlength="200" required></label>
+        <label>Client <input type="text" name="client" maxlength="200"></label>
+        <label>Activity <select name="activity"><option value="">(none)</option></select></label>
+        <label>Note <textarea name="note" rows="4" maxlength="2000"></textarea></label>
+        <div class="row">
+          <button type="submit" class="primary">Save changes</button>
+          <a id="dMap" class="button" target="_blank" rel="noopener">Open map</a>
+        </div>
+        <p id="saveMsg" class="small" aria-live="polite"></p>
+      </form>
+      <h3>Change history</h3>
+      <ul id="history" class="history"></ul>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

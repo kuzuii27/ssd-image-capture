@@ -1,0 +1,7 @@
+# lints recommended by `flutter_lints`
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+include: package:flutter_lints/flutter.yaml
