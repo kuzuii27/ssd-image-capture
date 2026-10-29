@@ -1,6 +1,6 @@
 ; Build with Inno Setup 6:  iscc SSDPhotoCapture.iss   (after running build-installer.ps1 publishes ..\publish)
 #define AppName "SSD Photo Capture"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppExe "SSDPhotoCapture.exe"
 
 [Setup]
